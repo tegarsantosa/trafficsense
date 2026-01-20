@@ -1,0 +1,10 @@
+ultralytics
+opencv-python
+numpy
+requests
+flask
+flask-cors
+Pillow
+yt-dlp
+pafy
+honcho
