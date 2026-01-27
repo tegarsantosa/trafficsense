@@ -35,9 +35,12 @@ API_CONFIG = {
 }
 
 PROCESSING_CONFIG = {
-    "interval_seconds": 30,
+    "interval_seconds": 1,
     "show_window": False,
     "batch_size": 1,
     "save_detections": False,
-    "output_dir": "detections/"
+    "output_dir": "detections/",
+    "dataset_mode": True,
+    "dataset_dir": "dataset",
+    "frame_rate": 1
 }

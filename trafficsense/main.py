@@ -3,6 +3,8 @@ import numpy as np
 import requests
 import json
 import yt_dlp
+import os
+import csv
 
 from ultralytics import YOLO
 from datetime import datetime
@@ -17,7 +19,9 @@ class VehicleDetector:
         confidence_threshold=0.5,
         vehicle_classes=None,
         class_names=None,
-        show_window=False
+        show_window=False,
+        dataset_mode=False,
+        dataset_dir="dataset"
     ):
         self.model = YOLO(model_path)
         self.webhook_url = webhook_url
@@ -30,12 +34,23 @@ class VehicleDetector:
             7: "truck"
         }
         self.show_window = show_window
+        self.dataset_mode = dataset_mode
+        self.dataset_dir = dataset_dir
+        
+        if self.dataset_mode:
+            os.makedirs(self.dataset_dir, exist_ok=True)
 
     def get_youtube_stream_url(self, youtube_url):
         ydl_opts = {
             "format": "best[height<=720]",
             "quiet": True,
-            "no_warnings": True
+            "no_warnings": True,
+            "nocheckcertificate": True,
+            "source_address": "0.0.0.0",
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
         }
 
         try:
@@ -90,12 +105,48 @@ class VehicleDetector:
         except Exception as e:
             print(f"[Webhook] Error: {e}")
 
+    def save_to_dataset(self, location_name, timestamp, vehicle_count, ci, status, detections):
+        dataset_file = os.path.join(self.dataset_dir, f"{location_name.replace(' ', '_')}_dataset.csv")
+        
+        file_exists = os.path.exists(dataset_file)
+        
+        with open(dataset_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            
+            if not file_exists:
+                writer.writerow([
+                    "timestamp",
+                    "vehicle_count",
+                    "congestion_index",
+                    "status",
+                    "cars",
+                    "motorcycles",
+                    "buses",
+                    "trucks"
+                ])
+            
+            vehicle_types = {"car": 0, "motorcycle": 0, "bus": 0, "truck": 0}
+            for det in detections:
+                vehicle_types[det["class"]] += 1
+            
+            writer.writerow([
+                timestamp,
+                vehicle_count,
+                ci,
+                status,
+                vehicle_types["car"],
+                vehicle_types["motorcycle"],
+                vehicle_types["bus"],
+                vehicle_types["truck"]
+            ])
+
     def process_video(
         self,
         video_source,
         location_name,
         road_capacity,
-        interval_seconds
+        interval_seconds,
+        frame_rate=1
     ):
         if isinstance(video_source, str) and "youtube.com" in video_source:
             video_source = self.get_youtube_stream_url(video_source)
@@ -109,56 +160,75 @@ class VehicleDetector:
             return
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        capture_interval = int(fps / frame_rate)
         frame_interval = int(fps * interval_seconds)
 
         frame_count = 0
         vehicle_counts = []
+        all_detections = []
 
-        print(f"[START] {location_name}")
+        print(f"[START] {location_name} | FPS: {fps} | Frame Rate: {frame_rate} fps")
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            detections, count = self.detect_vehicles(frame)
-            vehicle_counts.append(count)
+            if frame_count % capture_interval == 0:
+                detections, count = self.detect_vehicles(frame)
+                vehicle_counts.append(count)
+                all_detections.extend(detections)
 
-            if self.show_window:
-                for det in detections:
-                    x1, y1, x2, y2 = det["bbox"]
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                if self.show_window:
+                    for det in detections:
+                        x1, y1, x2, y2 = det["bbox"]
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-                cv2.putText(
-                    frame,
-                    f"{location_name} | Vehicles: {count}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 0, 255),
-                    2
-                )
+                    cv2.putText(
+                        frame,
+                        f"{location_name} | Vehicles: {count}",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 255),
+                        2
+                    )
 
-                cv2.imshow(f"TrafficSense - {location_name}", frame)
+                    cv2.imshow(f"TrafficSense - {location_name}", frame)
 
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
 
             if frame_count % frame_interval == 0 and vehicle_counts:
                 avg_count = int(np.mean(vehicle_counts))
                 ci = self.calculate_congestion_index(avg_count, road_capacity)
                 status = self.classify_congestion(ci)
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                 payload = {
                     "lokasi": location_name,
-                    "waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "waktu": timestamp,
                     "jumlah_kendaraan": avg_count,
                     "congestion_index": ci,
                     "status": status
                 }
 
-                self.send_to_webhook(payload)
+                if self.dataset_mode:
+                    self.save_to_dataset(
+                        location_name,
+                        timestamp,
+                        avg_count,
+                        ci,
+                        status,
+                        all_detections
+                    )
+                    print(f"[DATASET] {location_name} | Count: {avg_count} | CI: {ci} | Status: {status}")
+                else:
+                    self.send_to_webhook(payload)
+                    print(f"[WEBHOOK] {location_name} | Count: {avg_count} | CI: {ci} | Status: {status}")
+
                 vehicle_counts.clear()
+                all_detections.clear()
 
             frame_count += 1
 
@@ -176,14 +246,17 @@ def run_camera(location, model_cfg, api_cfg, processing_cfg):
         confidence_threshold=model_cfg["confidence_threshold"],
         vehicle_classes=model_cfg["vehicle_classes"],
         class_names=model_cfg["class_names"],
-        show_window=processing_cfg.get("show_window", False)
+        show_window=processing_cfg.get("show_window", False),
+        dataset_mode=processing_cfg.get("dataset_mode", False),
+        dataset_dir=processing_cfg.get("dataset_dir", "dataset")
     )
 
     detector.process_video(
         video_source=location["video_source"],
         location_name=location["name"],
         road_capacity=location["road_capacity"],
-        interval_seconds=processing_cfg["interval_seconds"]
+        interval_seconds=processing_cfg["interval_seconds"],
+        frame_rate=processing_cfg.get("frame_rate", 1)
     )
 
 
