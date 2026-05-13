@@ -1,0 +1,54 @@
+services:
+  model_transformer:
+    build: ./model_transformer
+    container_name: trafficsense_model_transformer
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data:ro
+    environment:
+      - DATA_PATH=/app/data/traffic.csv
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build: ./backend
+    container_name: trafficsense_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data:ro
+    environment:
+      - DATA_PATH=/app/data/traffic.csv
+      - MODEL_TRANSFORMER_URL=http://model_transformer:8001
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=deepseek-r1:8b
+      - PLAYBACK_INITIAL_ROWS=10
+      - PLAYBACK_INTERVAL_SECONDS=5
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      model_transformer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    build: ./frontend
+    container_name: trafficsense_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+    depends_on:
+      backend:
+        condition: service_healthy
