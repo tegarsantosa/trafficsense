@@ -209,7 +209,7 @@ if not st.session_state.playback_started:
         pass
 
 # ============ MAIN TABS ============
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📈 Analytics", "🔮 Prediction", "🤖 AI Chat"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "📈 Analytics", "🔮 Prediction", "🤖 AI Chat", "📋 Dataset"])
 
 # ============ TAB 1: DASHBOARD ============
 with tab1:
@@ -640,4 +640,152 @@ with tab4:
         st.rerun()
 
 
+# ============ TAB 5: DATASET ============
+with tab5:
+    st.header("Full Dataset Viewer")
+    st.caption("Browse all traffic measurements with customizable row limit")
     
+    col_rows, col_export = st.columns([2, 1])
+    
+    with col_rows:
+        max_rows = st.number_input(
+            "Number of rows to display",
+            min_value=10,
+            max_value=10000,
+            value=100,
+            step=10,
+            help="Adjust the number of records to show in the table"
+        )
+    
+    with col_export:
+        refresh_btn = st.button("🔄 Refresh", use_container_width=True)
+    
+    raw_data = fetch("/data/full")
+    
+    if raw_data and raw_data["data"]:
+        df = pd.DataFrame(raw_data["data"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values("timestamp", ascending=False).reset_index(drop=True)
+        
+        # Limit display rows
+        display_df = df.head(max_rows).copy()
+        
+        # Format columns for display
+        display_df["timestamp"] = display_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        display_df["congestion_index"] = display_df["congestion_index"].round(4)
+        display_df["jumlah_bobot_kendaraan"] = display_df["jumlah_bobot_kendaraan"].round(2)
+        
+        # Reorder columns
+        col_order = [
+            "id", "timestamp", "nama_tol", "lokasi",
+            "jumlah_mobil", "jumlah_bus", "jumlah_truck", "jumlah_kendaraan",
+            "jumlah_bobot_kendaraan", "congestion_index", "status"
+        ]
+        display_df = display_df[col_order]
+        
+        # Rename for better display
+        display_df = display_df.rename(columns={
+            "id": "ID",
+            "timestamp": "Timestamp",
+            "nama_tol": "Toll Road",
+            "lokasi": "Location",
+            "jumlah_mobil": "Cars",
+            "jumlah_bus": "Buses",
+            "jumlah_truck": "Trucks",
+            "jumlah_kendaraan": "Total Vehicles",
+            "jumlah_bobot_kendaraan": "Weight Load",
+            "congestion_index": "DS",
+            "status": "Status"
+        })
+        
+        st.divider()
+        st.subheader(f"📊 Showing {len(display_df)} of {len(df)} total records")
+        
+        # Display table
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            height=600
+        )
+        
+        # Summary statistics
+        st.divider()
+        st.subheader("📈 Summary Statistics")
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            total_records = len(df)
+            st.metric("Total Records", total_records)
+        
+        with col2:
+            avg_ds = df["congestion_index"].mean()
+            st.metric("Avg DS", f"{avg_ds:.4f}")
+        
+        with col3:
+            total_vehicles = df["jumlah_kendaraan"].sum()
+            st.metric("Total Vehicles", int(total_vehicles))
+        
+        with col4:
+            unique_tolls = df["nama_tol"].nunique()
+            st.metric("Unique Tolls", unique_tolls)
+        
+        with col5:
+            time_span = (df["timestamp"].max() - df["timestamp"].min())
+            st.metric("Time Span", f"{time_span.days}d {time_span.seconds//3600}h")
+        
+        # Detailed statistics by toll road
+        st.divider()
+        st.subheader("🛣️ Statistics by Toll Road")
+        
+        toll_stats = df.groupby("nama_tol").agg({
+            "congestion_index": ["min", "max", "mean"],
+            "jumlah_kendaraan": ["min", "max", "mean", "sum"],
+            "status": lambda x: x.value_counts().to_dict()
+        }).round(4)
+        
+        toll_summary = []
+        for toll_name in df["nama_tol"].unique():
+            toll_data = df[df["nama_tol"] == toll_name]
+            toll_summary.append({
+                "Toll Road": toll_name,
+                "Records": len(toll_data),
+                "Avg DS": f"{toll_data['congestion_index'].mean():.4f}",
+                "Min DS": f"{toll_data['congestion_index'].min():.4f}",
+                "Max DS": f"{toll_data['congestion_index'].max():.4f}",
+                "Total Vehicles": int(toll_data["jumlah_kendaraan"].sum()),
+                "Avg Vehicles": f"{toll_data['jumlah_kendaraan'].mean():.0f}"
+            })
+        
+        toll_summary_df = pd.DataFrame(toll_summary)
+        st.dataframe(toll_summary_df, use_container_width=True, hide_index=True)
+        
+        # Chart: DS distribution
+        st.divider()
+        st.subheader("📉 Congestion Index Distribution")
+        
+        col_chart1, col_chart2 = st.columns(2)
+        
+        with col_chart1:
+            fig_hist = px.histogram(
+                df, x="congestion_index", nbins=30, color="status",
+                color_discrete_map={"Low": "#2ecc71", "Medium": "#f39c12", "High": "#e74c3c"},
+                labels={"congestion_index": "Congestion Index (DS)", "count": "Frequency"}
+            )
+            fig_hist.update_layout(**CHART_LAYOUT, height=400)
+            st.plotly_chart(fig_hist, use_container_width=True)
+        
+        with col_chart2:
+            status_dist = df["status"].value_counts()
+            fig_pie = px.pie(
+                values=status_dist.values, names=status_dist.index,
+                color=status_dist.index,
+                color_discrete_map={"Low": "#2ecc71", "Medium": "#f39c12", "High": "#e74c3c"},
+                title="Status Distribution (All Records)"
+            )
+            fig_pie.update_layout(**CHART_LAYOUT, height=400)
+            st.plotly_chart(fig_pie, use_container_width=True)
+    
+    else:
+        st.info("No data available. Press ▶ to start playback.")

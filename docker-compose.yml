@@ -4,11 +4,15 @@ services:
     container_name: trafficsense_model_transformer
     ports:
       - "8001:8001"
-    volumes:
-      - ./data:/app/data:ro
     environment:
-      - DATA_PATH=/app/data/traffic.csv
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=trafficsense
+      - DB_USER=trafficsense
+      - DB_PASSWORD=password
     command: uvicorn main:app --host 0.0.0.0 --port 8001
+    depends_on:
+      - postgres
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
       interval: 15s
@@ -16,15 +20,30 @@ services:
       retries: 5
       start_period: 10s
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: trafficsense
+      POSTGRES_USER: trafficsense
+      POSTGRES_PASSWORD: password
+    volumes:
+      - ./data:/app/data
+      - ./.tmp/postgres-data:/var/lib/postgresql/data
+
   backend:
     build: ./backend
     container_name: trafficsense_backend
     ports:
       - "8000:8000"
-    volumes:
-      - ./data:/app/data:ro
     environment:
-      - DATA_PATH=/app/data/traffic.csv
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=trafficsense
+      - DB_USER=trafficsense
+      - DB_PASSWORD=password
       - MODEL_TRANSFORMER_URL=http://model_transformer:8001
       - OLLAMA_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=deepseek-r1:8b
@@ -32,6 +51,8 @@ services:
       - PLAYBACK_INTERVAL_SECONDS=5
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     depends_on:
+      postgres:
+        condition: service_healthy
       model_transformer:
         condition: service_healthy
     healthcheck:

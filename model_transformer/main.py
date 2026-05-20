@@ -19,11 +19,19 @@ from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 import json
 import warnings
+from sqlalchemy import create_engine
 warnings.filterwarnings('ignore')
 
 app = FastAPI(title="TrafficSense Model Transformer", version="2.0.0")
 
-DATA_PATH = os.getenv("DATA_PATH", "../data/traffic.csv")
+# PostgreSQL connection settings
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "trafficsense")
+DB_USER = os.getenv("DB_USER", "trafficsense")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
 MODEL_DIR = "/tmp/traffic_models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
@@ -72,9 +80,11 @@ def congestion_to_status(index: float) -> str:
 
 
 def load_data():
-    """Load traffic data"""
-    df = pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    """Load traffic data from PostgreSQL database"""
+    engine = create_engine(DATABASE_URL)
+    query = "SELECT * FROM traffic ORDER BY timestamp"
+    df = pd.read_sql(query, engine, parse_dates=["timestamp"])
+    engine.dispose()
     return df
 
 

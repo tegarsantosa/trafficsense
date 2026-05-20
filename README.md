@@ -2,6 +2,11 @@
 
 Real-time toll road traffic analytics platform with ML prediction and AI chatbot.
 
+## Group
+1. Tegar Santosa
+2. Gisela Venska
+3. Eka Aji
+
 ## Architecture
 
 ```

@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from typing import Optional, List
+from sqlalchemy import create_engine
 
 app = FastAPI(title="TrafficSense Backend", version="1.0.0")
 
@@ -18,7 +19,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DATA_PATH = os.getenv("DATA_PATH", "../data/traffic.csv")
+# PostgreSQL connection settings
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "trafficsense")
+DB_USER = os.getenv("DB_USER", "trafficsense")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
 MODEL_TRANSFORMER_URL = os.getenv("MODEL_TRANSFORMER_URL", "http://localhost:8001")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
@@ -35,9 +43,11 @@ class PlaybackState:
         self.is_finished: bool = False
         self.tick_thread: Optional[threading.Thread] = None
 
-    def load(self, path: str):
-        df = pd.read_csv(path, parse_dates=["timestamp"])
-        df = df.sort_values("timestamp").reset_index(drop=True)
+    def load(self):
+        engine = create_engine(DATABASE_URL)
+        query = "SELECT * FROM traffic ORDER BY timestamp"
+        df = pd.read_sql(query, engine, parse_dates=["timestamp"])
+        engine.dispose()
         with self.lock:
             self.all_data = df
             self.visible_count = min(PLAYBACK_INITIAL_ROWS, len(df))
@@ -120,7 +130,7 @@ playback = PlaybackState()
 
 @app.on_event("startup")
 def startup():
-    playback.load(DATA_PATH)
+    playback.load()
 
 
 class ChatMessage(BaseModel):
@@ -198,6 +208,23 @@ def get_data(nama_tol: Optional[str] = None):
     df = playback.get_visible()
     if nama_tol:
         df = df[df["nama_tol"] == nama_tol]
+    df = df.sort_values("timestamp")
+    records = df.copy()
+    records["timestamp"] = records["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    return {"data": records.to_dict(orient="records")}
+
+
+@app.get("/data/full")
+def get_data_full(nama_tol: Optional[str] = None):
+    """Get all data from database (not respecting playback state)"""
+    engine = create_engine(DATABASE_URL)
+    query = "SELECT * FROM traffic ORDER BY timestamp"
+    df = pd.read_sql(query, engine, parse_dates=["timestamp"])
+    engine.dispose()
+    
+    if nama_tol:
+        df = df[df["nama_tol"] == nama_tol]
+    
     df = df.sort_values("timestamp")
     records = df.copy()
     records["timestamp"] = records["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
